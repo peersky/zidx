@@ -1,0 +1,21 @@
+{
+  "name": "confidential-indexer-envio",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "codegen": "envio codegen",
+    "dev": "envio dev",
+    "start": "envio start"
+  },
+  "dependencies": {
+    "envio": "^3.0.0",
+    "postgres": "^3.4.5",
+    "viem": "^2.30.0",
+    "@nats-io/jetstream": "^3.0.0",
+    "@nats-io/transport-node": "^3.0.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.3"
+  }
+}

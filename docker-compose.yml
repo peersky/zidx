@@ -1,0 +1,199 @@
+# End-to-end stack for the Confidential Indexer.
+#
+# Preconditions (run on host before `docker compose up`):
+#   1. Anvil running on host port 8545 (see `./scripts/start-anvil.sh`)
+#   2. fhEVM host contracts deployed at canonical addresses
+#   3. ConfidentialToken deployed; address written to .env.local as TOKEN_ADDRESS
+#
+# `docker compose up` then brings online:
+#   - envio-postgres + graphql-engine (Envio's own DB + Hasura)
+#   - envio-indexer (HyperIndex v3, processes chain events into app.* schema)
+#   - nats (JetStream)
+#   - api, worker, escalator, balance-refresh (our Node services)
+#
+# Inside docker, services reach Anvil via host.docker.internal:8545 (Mac/Win
+# Docker Desktop) — on Linux you may need `extra_hosts` or the host's LAN IP.
+
+services:
+  envio-postgres:
+    image: postgres:17.5
+    restart: always
+    ports: ["${ENVIO_PG_PORT:-5433}:5432"]
+    volumes:
+      - envio-pg-data:/var/lib/postgresql/data
+    environment:
+      POSTGRES_PASSWORD: ${ENVIO_PG_PASSWORD:-testing}
+      POSTGRES_USER: ${ENVIO_PG_USER:-postgres}
+      POSTGRES_DB: ${ENVIO_PG_DATABASE:-envio-dev}
+    networks: [envio-net]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d ${ENVIO_PG_DATABASE:-envio-dev}"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  graphql-engine:
+    image: hasura/graphql-engine:v2.43.0
+    ports: ["${HASURA_PORT:-8080}:8080"]
+    user: 1001:1001
+    depends_on:
+      envio-postgres: { condition: service_healthy }
+    restart: always
+    environment:
+      HASURA_GRAPHQL_DATABASE_URL: postgres://${ENVIO_PG_USER:-postgres}:${ENVIO_PG_PASSWORD:-testing}@envio-postgres:5432/${ENVIO_PG_DATABASE:-envio-dev}
+      HASURA_GRAPHQL_ENABLE_CONSOLE: "true"
+      HASURA_GRAPHQL_ADMIN_SECRET: ${HASURA_GRAPHQL_ADMIN_SECRET:-testing}
+      HASURA_GRAPHQL_STRINGIFY_NUMERIC_TYPES: "true"
+      HASURA_GRAPHQL_NO_OF_RETRIES: 10
+      PORT: 8080
+    healthcheck:
+      test: ["CMD-SHELL", "timeout 1s bash -c ':> /dev/tcp/127.0.0.1/8080' || exit 1"]
+      interval: 5s
+      timeout: 2s
+      retries: 50
+      start_period: 5s
+    networks: [envio-net]
+
+  nats:
+    image: nats:2.10-alpine
+    command: ["-js", "-sd", "/data", "-m", "8222"]
+    ports: ["4222:4222", "8222:8222"]
+    volumes: [nats-data:/data]
+    networks: [envio-net]
+    # nats:alpine has no wget/curl; verify the server binary is running.
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep nats-server >/dev/null"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 3s
+
+  migrate:
+    build: { context: ., dockerfile: Dockerfile }
+    depends_on:
+      envio-postgres: { condition: service_healthy }
+    environment:
+      DATABASE_URL: postgres://${ENVIO_PG_USER:-postgres}:${ENVIO_PG_PASSWORD:-testing}@envio-postgres:5432/${ENVIO_PG_DATABASE:-envio-dev}
+    command: ["node", "dist/src/db/migrate.js"]
+    networks: [envio-net]
+    restart: "no"
+
+  envio-indexer:
+    container_name: envio-indexer
+    build:
+      context: ./envio
+      dockerfile: Dockerfile
+    depends_on:
+      graphql-engine: { condition: service_healthy }
+      migrate: { condition: service_completed_successfully }
+      nats: { condition: service_healthy }
+    restart: always
+    environment:
+      ENVIO_PG_HOST: envio-postgres
+      ENVIO_PG_PORT: 5432
+      ENVIO_PG_USER: ${ENVIO_PG_USER:-postgres}
+      ENVIO_PG_PASSWORD: ${ENVIO_PG_PASSWORD:-testing}
+      ENVIO_PG_DATABASE: ${ENVIO_PG_DATABASE:-envio-dev}
+      ENVIO_PG_PUBLIC_SCHEMA: envio
+      ENVIO_INDEXER_HOST: 0.0.0.0
+      ENVIO_INDEXER_PORT: 9898
+      HASURA_GRAPHQL_ENDPOINT: http://graphql-engine:8080/v1/metadata
+      HASURA_GRAPHQL_ADMIN_SECRET: ${HASURA_GRAPHQL_ADMIN_SECRET:-testing}
+      HASURA_SERVICE_HOST: graphql-engine
+      HASURA_SERVICE_PORT: 8080
+      DATABASE_URL: postgres://${ENVIO_PG_USER:-postgres}:${ENVIO_PG_PASSWORD:-testing}@envio-postgres:5432/${ENVIO_PG_DATABASE:-envio-dev}
+      NATS_URL: nats://nats:4222
+      RPC_URL: http://host.docker.internal:8545
+      TOKEN_ADDRESS: ${TOKEN_ADDRESS}
+      ACL_CONTRACT_ADDRESS: ${ACL_CONTRACT_ADDRESS}
+      TUI_OFF: "true"
+      LOG_STRATEGY: console-pretty
+    extra_hosts: ["host.docker.internal:host-gateway"]
+    networks: [envio-net]
+
+  api:
+    build: { context: ., dockerfile: Dockerfile }
+    depends_on:
+      envio-postgres: { condition: service_healthy }
+      migrate: { condition: service_completed_successfully }
+    environment:
+      DATABASE_URL: postgres://${ENVIO_PG_USER:-postgres}:${ENVIO_PG_PASSWORD:-testing}@envio-postgres:5432/${ENVIO_PG_DATABASE:-envio-dev}
+      NATS_URL: nats://nats:4222
+      API_PORT: "3000"
+      API_HOST: "0.0.0.0"
+    ports: ["3000:3000"]
+    command: ["node", "dist/src/api/server.js"]
+    networks: [envio-net]
+    restart: unless-stopped
+
+  worker:
+    build: { context: ., dockerfile: Dockerfile }
+    depends_on:
+      envio-postgres: { condition: service_healthy }
+      nats: { condition: service_healthy }
+      migrate: { condition: service_completed_successfully }
+    environment:
+      DATABASE_URL: postgres://${ENVIO_PG_USER:-postgres}:${ENVIO_PG_PASSWORD:-testing}@envio-postgres:5432/${ENVIO_PG_DATABASE:-envio-dev}
+      NATS_URL: nats://nats:4222
+      RPC_URL: http://host.docker.internal:8545
+      CHAIN_ID: "31337"
+      TOKEN_ADDRESS: ${TOKEN_ADDRESS}
+      ZAMA_RELAYER_MODE: cleartext
+      INDEXER_PRIVATE_KEY: ${INDEXER_PRIVATE_KEY}
+      SECOND_PK: ${SECOND_PK:-}
+      MOCK_FAILING_SIGNERS: ${MOCK_FAILING_SIGNERS:-}
+      NATS_MAX_DELIVER: ${NATS_MAX_DELIVER:-3}
+    command: ["node", "dist/src/worker/main.js"]
+    extra_hosts: ["host.docker.internal:host-gateway"]
+    networks: [envio-net]
+    restart: unless-stopped
+
+  escalator:
+    build: { context: ., dockerfile: Dockerfile }
+    depends_on:
+      envio-postgres: { condition: service_healthy }
+      nats: { condition: service_healthy }
+      migrate: { condition: service_completed_successfully }
+    environment:
+      DATABASE_URL: postgres://${ENVIO_PG_USER:-postgres}:${ENVIO_PG_PASSWORD:-testing}@envio-postgres:5432/${ENVIO_PG_DATABASE:-envio-dev}
+      NATS_URL: nats://nats:4222
+    command: ["node", "dist/src/worker/escalator.js"]
+    networks: [envio-net]
+    restart: unless-stopped
+
+  balance-refresh:
+    build: { context: ., dockerfile: Dockerfile }
+    depends_on:
+      envio-postgres: { condition: service_healthy }
+      migrate: { condition: service_completed_successfully }
+    environment:
+      DATABASE_URL: postgres://${ENVIO_PG_USER:-postgres}:${ENVIO_PG_PASSWORD:-testing}@envio-postgres:5432/${ENVIO_PG_DATABASE:-envio-dev}
+      RPC_URL: http://host.docker.internal:8545
+      CHAIN_ID: "31337"
+      TOKEN_ADDRESS: ${TOKEN_ADDRESS}
+      ZAMA_RELAYER_MODE: cleartext
+      INDEXER_PRIVATE_KEY: ${INDEXER_PRIVATE_KEY}
+    command: ["node", "dist/src/worker/balance-refresh.js"]
+    extra_hosts: ["host.docker.internal:host-gateway"]
+    networks: [envio-net]
+    restart: unless-stopped
+
+  nats-audit:
+    build: { context: ., dockerfile: Dockerfile }
+    depends_on:
+      envio-postgres: { condition: service_healthy }
+      nats: { condition: service_healthy }
+      migrate: { condition: service_completed_successfully }
+    environment:
+      DATABASE_URL: postgres://${ENVIO_PG_USER:-postgres}:${ENVIO_PG_PASSWORD:-testing}@envio-postgres:5432/${ENVIO_PG_DATABASE:-envio-dev}
+      NATS_URL: nats://nats:4222
+    command: ["node", "dist/src/worker/audit.js"]
+    networks: [envio-net]
+    restart: unless-stopped
+
+volumes:
+  envio-pg-data: {}
+  nats-data: {}
+
+networks:
+  envio-net: {}

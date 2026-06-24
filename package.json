@@ -1,0 +1,51 @@
+{
+  "name": "confidential-indexer",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "packageManager": "pnpm@10.0.0",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev:api": "tsx watch src/api/server.ts",
+    "dev:worker": "tsx watch src/worker/main.ts",
+    "dev:escalator": "tsx watch src/worker/escalator.ts",
+    "dev:balance": "tsx watch src/worker/balance-refresh.ts",
+    "dev": "concurrently -n api,worker,escalator,balance -c blue,green,yellow,magenta 'pnpm dev:api' 'pnpm dev:worker' 'pnpm dev:escalator' 'pnpm dev:balance'",
+    "db:migrate": "tsx src/db/migrate.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:sql": "vitest run test/sql",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "forge:install": "cd forge-fhevm && forge soldeer install && forge build",
+    "forge:deploy-local": "cd forge-fhevm && ./deploy-local.sh --anvil-port 8545",
+    "forge:deploy-token": "tsx scripts/deploy-token.ts"
+  },
+  "dependencies": {
+    "@fastify/swagger": "^9.4.0",
+    "@fastify/swagger-ui": "^5.2.0",
+    "@nats-io/jetstream": "^3.0.0",
+    "@nats-io/nats-core": "^3.0.0",
+    "@nats-io/transport-node": "^3.0.0",
+    "@openzeppelin/confidential-contracts": "^0.4.1",
+    "@zama-fhe/sdk": "alpha",
+    "fastify": "^5.2.1",
+    "pino": "^9.5.0",
+    "pino-pretty": "^13.0.0",
+    "postgres": "^3.4.5",
+    "viem": "^2.30.0",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@testcontainers/postgresql": "^10.16.0",
+    "@types/node": "^22.10.5",
+    "concurrently": "^9.1.2",
+    "execa": "^9.6.1",
+    "testcontainers": "^10.16.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3",
+    "vitest": "^2.1.8"
+  }
+}

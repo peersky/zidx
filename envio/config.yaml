@@ -1,0 +1,45 @@
+# yaml-language-server: $schema=./node_modules/envio/evm.schema.json
+name: confidential-indexer
+description: ERC-7984 confidential token indexer with userDecrypt cleartext
+
+# Global contract definitions (shared across chains).
+contracts:
+  - name: ConfidentialToken
+    abi_file_path: ./abis/ConfidentialToken.json
+    handler: ./src/EventHandlers.ts
+    events:
+      - event: ConfidentialTransfer
+      - event: OperatorSet
+      - event: AmountDisclosed
+  - name: ACL
+    abi_file_path: ./abis/ACL.json
+    handler: ./src/EventHandlers.ts
+    events:
+      - event: Allowed
+      - event: DelegatedForUserDecryption
+      - event: RevokedDelegationForUserDecryption
+
+# Chains the indexer runs against.
+chains:
+  - id: 31337
+    start_block: 0
+    rpc:
+      url: ${RPC_URL:-http://localhost:8545}
+      initial_block_interval: 10000
+    contracts:
+      - name: ConfidentialToken
+        address: ${TOKEN_ADDRESS}
+      - name: ACL
+        address: ${ACL_CONTRACT_ADDRESS}
+
+# Anvil (chain 31337) never reorgs locally → false for dev iteration speed.
+# Flip to `true` on Sepolia/mainnet; our handlers + the rollback hook
+# (src/db/rollback.ts wired in EventHandlers.ts) mirror Envio's rollback
+# into app.*, so cleartext/ACL/balance state stays consistent.
+rollback_on_reorg: false
+
+# Opt in to transaction.hash on every event — we hash it into tx_hash for
+# idempotent UPSERT keying.
+field_selection:
+  transaction_fields:
+    - hash

@@ -1,0 +1,33 @@
+[profile.default]
+src = "src"
+test = "test"
+script = "script"
+out = "out"
+libs = ["dependencies"]
+solc_version = "0.8.27"
+evm_version = "cancun"
+auto_detect_solc = false
+optimizer = true
+optimizer_runs = 200
+
+# Soldeer-managed deps
+[dependencies]
+forge-std = "1.14.0"
+"@openzeppelin-contracts" = "5.1.0"
+"@openzeppelin-contracts-upgradeable" = "5.1.0"
+"@encrypted-types" = "0.0.4"
+"@fhevm-solidity" = "0.11.1"
+
+# OZ confidential-contracts comes from npm @openzeppelin/confidential-contracts
+# (see ../node_modules) — the soldeer git pull failed due to recursive submodule
+# fetch issues. Remappings point at node_modules below.
+
+[soldeer]
+remappings_generate = false
+recursive_deps = true
+
+[etherscan]
+# unused locally
+
+[rpc_endpoints]
+local = "http://localhost:8545"

@@ -1,0 +1,18 @@
+## Envio entities — kept minimal. Authoritative business state lives in app.* schema.
+## These exist so HyperIndex has something to manage; we use them for indexer-head
+## tracking (Hasura users can also query them as a fallback view).
+
+type IndexerState @entity {
+  id: ID!                           # always "singleton"
+  lastBlock: BigInt!
+  updatedAt: BigInt!
+}
+
+type RawEvent @entity {
+  id: ID!                           # txHash-logIndex
+  kind: String!                    # ConfidentialTransfer | OperatorSet | AmountDisclosed | Allowed | Delegated | RevokedDelegation
+  block: BigInt!
+  txHash: String!
+  logIndex: Int!
+  payload: String!                  # JSON-stringified raw event for audit
+}

@@ -1,0 +1,23 @@
+node_modules/
+dist/
+.env
+.env.local
+*.log
+.vitest-cache/
+.DS_Store
+
+# AI working dir
+.claude/
+
+# Foundry
+contracts/cache/
+contracts/out/
+contracts/broadcast/
+contracts/dependencies/
+contracts/.env
+
+# Envio
+envio/.envio/
+envio/generated/
+envio/node_modules/
+.slop/
